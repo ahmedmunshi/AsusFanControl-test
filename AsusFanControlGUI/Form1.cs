@@ -4,6 +4,7 @@ using AsusFanControl.Services;
 using AsusFanControlGUI.Theme;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Windows.Forms;
 
@@ -20,20 +21,101 @@ namespace AsusFanControlGUI
 
         private bool _suppressProfileEvents;
         private int _selectedFanIndex = -1; // -1 = All (default curve)
+        private bool _initOk;
 
         public Form1()
         {
             InitializeComponent();
 
-            asusControl = new AsusControl();
-            profileManager = new ProfileManager();
-            curveEngine = new FanCurveEngine(asusControl);
-            curveEngine.OnTick += CurveEngine_OnTick;
-
             AppDomain.CurrentDomain.ProcessExit += new EventHandler(OnProcessExit);
 
             // Apply dark theme
             DarkTheme.Apply(this);
+
+            // Clear old logs on startup
+            ErrorLogger.Clear();
+            ErrorLogger.Log("Application starting.");
+
+            // Check admin privileges
+            if (!DiagnosticHelper.IsRunAsAdmin())
+            {
+                ErrorLogger.Log("WARNING: Not running as administrator.");
+                var result = MessageBox.Show(
+                    "This application requires Administrator privileges to control fans.\n\n" +
+                    "Restart as Administrator?",
+                    "Admin Required",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning
+                );
+
+                if (result == DialogResult.Yes)
+                {
+                    try
+                    {
+                        var exePath = Application.ExecutablePath;
+                        var psi = new ProcessStartInfo
+                        {
+                            FileName = exePath,
+                            UseShellExecute = true,
+                            Verb = "runas"
+                        };
+                        Process.Start(psi);
+                        Application.Exit();
+                        return;
+                    }
+                    catch (Exception ex)
+                    {
+                        ErrorLogger.Log("AdminRelaunch", ex);
+                        MessageBox.Show("Failed to restart as admin: " + ex.Message, "Error",
+                            MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                }
+            }
+
+            // Check DLL exists
+            if (!DiagnosticHelper.DllExistsNextToExe())
+            {
+                ErrorLogger.Log("CRITICAL: AsusWinIO64.dll not found next to executable.");
+                MessageBox.Show(
+                    "AsusWinIO64.dll was not found next to the executable.\n\n" +
+                    "This file is required for fan control to work.\n" +
+                    "Make sure all files from the zip are extracted together.",
+                    "Missing DLL",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
+            }
+
+            // Initialize ASUS control
+            try
+            {
+                asusControl = new AsusControl();
+                _initOk = true;
+                ErrorLogger.Log("AsusControl initialized successfully.");
+            }
+            catch (Exception ex)
+            {
+                _initOk = false;
+                ErrorLogger.Log("AsusControl.Init", ex);
+                MessageBox.Show(
+                    $"Failed to initialize ASUS fan control:\n\n{ex.Message}\n\n" +
+                    "Make sure:\n" +
+                    "1. You are running as Administrator\n" +
+                    "2. ASUS System Control Interface is installed\n" +
+                    "3. AsusWinIO64.dll is present",
+                    "Initialization Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
+            }
+
+            profileManager = new ProfileManager();
+
+            if (_initOk && asusControl != null)
+            {
+                curveEngine = new FanCurveEngine(asusControl);
+                curveEngine.OnTick += CurveEngine_OnTick;
+            }
 
             // Load settings
             toolStripMenuItemTurnOffControlOnExit.Checked = Properties.Settings.Default.turnOffControlOnExit;
@@ -45,6 +127,12 @@ namespace AsusFanControlGUI
         {
             LoadProfiles();
             UpdateUnsafeThreshold();
+
+            if (!_initOk)
+            {
+                labelAppliedSpeed.Text = "Init failed - see log";
+                checkBoxEnable.Enabled = false;
+            }
         }
 
         #region Profile Management
@@ -107,13 +195,19 @@ namespace AsusFanControlGUI
             comboBoxFanSelect.Items.Clear();
             comboBoxFanSelect.Items.Add("All (Default)");
 
-            try
+            if (_initOk && asusControl != null)
             {
-                var fanCount = asusControl.HealthyTable_FanCounts();
-                for (int i = 0; i < fanCount; i++)
-                    comboBoxFanSelect.Items.Add($"Fan {i}");
+                try
+                {
+                    var fanCount = asusControl.HealthyTable_FanCounts();
+                    for (int i = 0; i < fanCount; i++)
+                        comboBoxFanSelect.Items.Add($"Fan {i}");
+                }
+                catch (Exception ex)
+                {
+                    ErrorLogger.Log("PopulateFanSelector", ex);
+                }
             }
-            catch { }
 
             comboBoxFanSelect.SelectedIndex = 0;
             _selectedFanIndex = -1;
@@ -143,7 +237,6 @@ namespace AsusFanControlGUI
 
             LoadProfiles();
 
-            // Select the new profile
             var idx = profiles.FindIndex(p => p.Name == name);
             if (idx >= 0)
             {
@@ -228,6 +321,19 @@ namespace AsusFanControlGUI
 
         private void checkBoxEnable_CheckedChanged(object sender, EventArgs e)
         {
+            if (!_initOk)
+            {
+                checkBoxEnable.Checked = false;
+                MessageBox.Show(
+                    "Fan control is not available. Initialization failed.\n\n" +
+                    "Use Advanced > Run Diagnostics to check what's wrong.",
+                    "Not Available",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning
+                );
+                return;
+            }
+
             if (checkBoxEnable.Checked)
                 RestartEngineIfEnabled();
             else
@@ -236,7 +342,7 @@ namespace AsusFanControlGUI
 
         private void RestartEngineIfEnabled()
         {
-            if (!checkBoxEnable.Checked || activeProfile == null)
+            if (!checkBoxEnable.Checked || activeProfile == null || curveEngine == null)
                 return;
 
             curveEngine.Stop(false);
@@ -245,7 +351,8 @@ namespace AsusFanControlGUI
 
         private void StopEngine(bool resetFans)
         {
-            curveEngine.Stop(resetFans);
+            if (curveEngine != null)
+                curveEngine.Stop(resetFans);
         }
 
         #endregion
@@ -259,7 +366,6 @@ namespace AsusFanControlGUI
             FanCurve curve;
             if (activeProfile.UsePerFanCurves && _selectedFanIndex >= 0)
             {
-                // Get or create per-fan curve
                 if (!activeProfile.PerFanCurves.ContainsKey(_selectedFanIndex))
                     activeProfile.PerFanCurves[_selectedFanIndex] = activeProfile.DefaultCurve.Clone();
 
@@ -276,7 +382,8 @@ namespace AsusFanControlGUI
         private void fanCurveEditor_CurveChanged(object sender, EventArgs e)
         {
             SaveActiveProfile();
-            curveEngine.UpdateProfile(activeProfile);
+            if (curveEngine != null)
+                curveEngine.UpdateProfile(activeProfile);
         }
 
         private void checkBoxPerFan_CheckedChanged(object sender, EventArgs e)
@@ -307,7 +414,7 @@ namespace AsusFanControlGUI
         {
             if (_suppressProfileEvents) return;
 
-            _selectedFanIndex = comboBoxFanSelect.SelectedIndex - 1; // 0 = "All", 1 = Fan 0, etc.
+            _selectedFanIndex = comboBoxFanSelect.SelectedIndex - 1;
             UpdateCurveEditor();
         }
 
@@ -330,7 +437,8 @@ namespace AsusFanControlGUI
                 activeProfile.FixedSpeedPercent = trackBarFanSpeed.Value;
                 labelFixedSpeedValue.Text = $"{trackBarFanSpeed.Value}%";
                 SaveActiveProfile();
-                curveEngine.UpdateProfile(activeProfile);
+                if (curveEngine != null)
+                    curveEngine.UpdateProfile(activeProfile);
             }
         }
 
@@ -358,8 +466,18 @@ namespace AsusFanControlGUI
                 return;
             }
 
+            // Show errors in the stats bar
+            if (!string.IsNullOrEmpty(e.Error))
+            {
+                labelAppliedSpeed.Text = e.Error;
+                labelAppliedSpeed.ForeColor = System.Drawing.Color.FromArgb(255, 100, 100);
+                return;
+            }
+
+            labelAppliedSpeed.ForeColor = DarkTheme.TextPrimary;
+
             // Update stats labels
-            labelCpuTemp.Text = $"{e.Temperature}°C";
+            labelCpuTemp.Text = $"{e.Temperature} C";
             labelRPM.Text = string.Join("  ", e.FanRpms.Select(r => $"{r}"));
 
             if (e.AppliedSpeeds != null && e.AppliedSpeeds.Count > 0)
@@ -403,6 +521,37 @@ namespace AsusFanControlGUI
             System.Diagnostics.Process.Start("https://github.com/Karmel0x/AsusFanControl/releases");
         }
 
+        private void toolStripMenuItemRunDiagnostics_Click(object sender, EventArgs e)
+        {
+            var diag = DiagnosticHelper.RunFullDiagnostic(asusControl);
+            var summary = diag.GetSummary();
+
+            ErrorLogger.Log("Diagnostics run:\n" + summary);
+
+            MessageBox.Show(
+                summary,
+                "Diagnostics",
+                MessageBoxButtons.OK,
+                diag.AllPassed ? MessageBoxIcon.Information : MessageBoxIcon.Warning
+            );
+        }
+
+        private void toolStripMenuItemOpenLog_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                if (System.IO.File.Exists(ErrorLogger.LogFilePath))
+                    Process.Start("notepad.exe", ErrorLogger.LogFilePath);
+                else
+                    MessageBox.Show("No log file found.", "Log", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Failed to open log: " + ex.Message, "Error",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
         private void UpdateUnsafeThreshold()
         {
             fanCurveEditor.UnsafeThreshold = Properties.Settings.Default.forbidUnsafeSettings ? 40 : (int?)null;
@@ -414,13 +563,14 @@ namespace AsusFanControlGUI
 
         private void OnProcessExit(object sender, EventArgs e)
         {
-            if (Properties.Settings.Default.turnOffControlOnExit)
+            ErrorLogger.Log("Application exiting.");
+
+            if (curveEngine != null)
             {
-                curveEngine.Stop(true);
-            }
-            else
-            {
-                curveEngine.Stop(false);
+                if (Properties.Settings.Default.turnOffControlOnExit)
+                    curveEngine.Stop(true);
+                else
+                    curveEngine.Stop(false);
             }
         }
 

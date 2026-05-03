@@ -10,6 +10,7 @@ namespace AsusFanControl.Services
         public int Temperature { get; set; }
         public Dictionary<int, int> AppliedSpeeds { get; set; } // fanIndex -> speed%
         public List<int> FanRpms { get; set; }
+        public string Error { get; set; }
     }
 
     public class FanCurveEngine : IDisposable
@@ -44,12 +45,16 @@ namespace AsusFanControl.Services
                 _activeProfile = profile ?? throw new ArgumentNullException(nameof(profile));
                 _lastAppliedSpeeds.Clear();
 
-                if (_timer == null)
+                if (_timer != null)
                 {
-                    _timer = new Timer(Tick, null, 0, POLL_INTERVAL_MS);
+                    _timer.Dispose();
+                    _timer = null;
                 }
 
+                _timer = new Timer(Tick, null, 0, POLL_INTERVAL_MS);
                 _running = true;
+
+                ErrorLogger.Log($"Engine started. Mode={profile.Mode}, Profile={profile.Name}");
             }
         }
 
@@ -74,10 +79,22 @@ namespace AsusFanControl.Services
                 {
                     try
                     {
-                        _asusControl.SetFanSpeeds(0);
+                        // Reset each fan individually (synchronous) instead of async void SetFanSpeeds
+                        var fanCount = _asusControl.HealthyTable_FanCounts();
+                        for (byte i = 0; i < fanCount; i++)
+                        {
+                            _asusControl.SetFanSpeed((byte)0, i);
+                            System.Threading.Thread.Sleep(20);
+                        }
+                        ErrorLogger.Log("Fans reset to BIOS control.");
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        ErrorLogger.Log("Stop.ResetFans", ex);
+                    }
                 }
+
+                ErrorLogger.Log("Engine stopped.");
             }
         }
 
@@ -97,6 +114,8 @@ namespace AsusFanControl.Services
             if (!_running)
                 return;
 
+            string error = null;
+
             try
             {
                 FanProfile profile;
@@ -107,42 +126,86 @@ namespace AsusFanControl.Services
                     profile = _activeProfile;
                 }
 
-                var temperature = (int)_asusControl.Thermal_Read_Cpu_Temperature();
-                var fanCount = _asusControl.HealthyTable_FanCounts();
+                int temperature;
+                try
+                {
+                    temperature = (int)_asusControl.Thermal_Read_Cpu_Temperature();
+                }
+                catch (Exception ex)
+                {
+                    ErrorLogger.Log("Tick.ReadTemp", ex);
+                    error = $"Failed to read CPU temp: {ex.Message}";
+                    FireErrorTick(error);
+                    return;
+                }
+
+                int fanCount;
+                try
+                {
+                    fanCount = _asusControl.HealthyTable_FanCounts();
+                }
+                catch (Exception ex)
+                {
+                    ErrorLogger.Log("Tick.FanCount", ex);
+                    error = $"Failed to get fan count: {ex.Message}";
+                    FireErrorTick(error);
+                    return;
+                }
+
+                if (fanCount <= 0)
+                {
+                    error = $"Fan count returned {fanCount}. ASUS service may not be running.";
+                    ErrorLogger.Log(error);
+                    FireErrorTick(error);
+                    return;
+                }
+
                 var appliedSpeeds = new Dictionary<int, int>();
                 var fanRpms = new List<int>();
 
                 if (profile.Mode == "fixed")
                 {
-                    // Fixed speed mode
                     var speed = profile.FixedSpeedPercent;
 
                     for (int i = 0; i < fanCount; i++)
                     {
-                        if (ShouldApplySpeed(i, speed))
+                        try
                         {
-                            _asusControl.SetFanSpeed(speed, (byte)i);
-                            _lastAppliedSpeeds[i] = speed;
+                            if (ShouldApplySpeed(i, speed))
+                            {
+                                _asusControl.SetFanSpeed(speed, (byte)i);
+                                _lastAppliedSpeeds[i] = speed;
+                            }
+                            appliedSpeeds[i] = speed;
                         }
-
-                        appliedSpeeds[i] = speed;
+                        catch (Exception ex)
+                        {
+                            ErrorLogger.Log($"Tick.SetFanSpeed.Fixed[{i}]", ex);
+                            error = $"Failed to set fan {i} speed: {ex.Message}";
+                        }
                     }
                 }
                 else
                 {
-                    // Curve mode
                     for (int i = 0; i < fanCount; i++)
                     {
-                        var curve = profile.GetCurveForFan(i);
-                        var targetSpeed = curve.Interpolate(temperature);
-
-                        if (ShouldApplySpeed(i, targetSpeed))
+                        try
                         {
-                            _asusControl.SetFanSpeed(targetSpeed, (byte)i);
-                            _lastAppliedSpeeds[i] = targetSpeed;
-                        }
+                            var curve = profile.GetCurveForFan(i);
+                            var targetSpeed = curve.Interpolate(temperature);
 
-                        appliedSpeeds[i] = targetSpeed;
+                            if (ShouldApplySpeed(i, targetSpeed))
+                            {
+                                _asusControl.SetFanSpeed(targetSpeed, (byte)i);
+                                _lastAppliedSpeeds[i] = targetSpeed;
+                            }
+                            appliedSpeeds[i] = targetSpeed;
+                        }
+                        catch (Exception ex)
+                        {
+                            ErrorLogger.Log($"Tick.SetFanSpeed.Curve[{i}]", ex);
+                            error = $"Failed to set fan {i} speed: {ex.Message}";
+                        }
                     }
                 }
 
@@ -153,8 +216,9 @@ namespace AsusFanControl.Services
                     {
                         fanRpms.Add(_asusControl.GetFanSpeed((byte)i));
                     }
-                    catch
+                    catch (Exception ex)
                     {
+                        ErrorLogger.Log($"Tick.GetFanRPM[{i}]", ex);
                         fanRpms.Add(0);
                     }
                 }
@@ -164,13 +228,26 @@ namespace AsusFanControl.Services
                 {
                     Temperature = temperature,
                     AppliedSpeeds = appliedSpeeds,
-                    FanRpms = fanRpms
+                    FanRpms = fanRpms,
+                    Error = error
                 });
             }
-            catch
+            catch (Exception ex)
             {
-                // Swallow exceptions in the timer callback to prevent crashes
+                ErrorLogger.Log("Tick.Unhandled", ex);
+                FireErrorTick($"Unhandled error: {ex.Message}");
             }
+        }
+
+        private void FireErrorTick(string error)
+        {
+            OnTick?.Invoke(this, new FanCurveTickEventArgs
+            {
+                Temperature = 0,
+                AppliedSpeeds = new Dictionary<int, int>(),
+                FanRpms = new List<int>(),
+                Error = error
+            });
         }
 
         /// <summary>

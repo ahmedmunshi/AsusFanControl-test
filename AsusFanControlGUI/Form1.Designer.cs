@@ -92,10 +92,17 @@ namespace AsusFanControlGUI
             // 
             // toolStripMenuItem1
             // 
+            this.toolStripMenuItemRunDiagnostics = new System.Windows.Forms.ToolStripMenuItem();
+            this.toolStripMenuItemOpenLog = new System.Windows.Forms.ToolStripMenuItem();
+            this.toolStripSeparator1 = new System.Windows.Forms.ToolStripSeparator();
+
             this.toolStripMenuItem1.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
                 this.toolStripMenuItemTurnOffControlOnExit,
                 this.toolStripMenuItemForbidUnsafeSettings,
-                this.toolStripMenuItemMinimizeToTrayOnClose
+                this.toolStripMenuItemMinimizeToTrayOnClose,
+                this.toolStripSeparator1,
+                this.toolStripMenuItemRunDiagnostics,
+                this.toolStripMenuItemOpenLog
             });
             this.toolStripMenuItem1.Name = "toolStripMenuItem1";
             this.toolStripMenuItem1.Size = new System.Drawing.Size(72, 20);
@@ -127,6 +134,28 @@ namespace AsusFanControlGUI
             this.toolStripMenuItemMinimizeToTrayOnClose.Size = new System.Drawing.Size(207, 22);
             this.toolStripMenuItemMinimizeToTrayOnClose.Text = "Minimize to tray on close";
             this.toolStripMenuItemMinimizeToTrayOnClose.Click += new System.EventHandler(this.toolStripMenuItemMinimizeToTrayOnClose_Click);
+
+            // 
+            // toolStripSeparator1
+            // 
+            this.toolStripSeparator1.Name = "toolStripSeparator1";
+            this.toolStripSeparator1.Size = new System.Drawing.Size(204, 6);
+
+            // 
+            // toolStripMenuItemRunDiagnostics
+            // 
+            this.toolStripMenuItemRunDiagnostics.Name = "toolStripMenuItemRunDiagnostics";
+            this.toolStripMenuItemRunDiagnostics.Size = new System.Drawing.Size(207, 22);
+            this.toolStripMenuItemRunDiagnostics.Text = "Run Diagnostics";
+            this.toolStripMenuItemRunDiagnostics.Click += new System.EventHandler(this.toolStripMenuItemRunDiagnostics_Click);
+
+            // 
+            // toolStripMenuItemOpenLog
+            // 
+            this.toolStripMenuItemOpenLog.Name = "toolStripMenuItemOpenLog";
+            this.toolStripMenuItemOpenLog.Size = new System.Drawing.Size(207, 22);
+            this.toolStripMenuItemOpenLog.Text = "Open Error Log";
+            this.toolStripMenuItemOpenLog.Click += new System.EventHandler(this.toolStripMenuItemOpenLog_Click);
 
             // 
             // toolStripMenuItemCheckForUpdates
@@ -336,6 +365,9 @@ namespace AsusFanControlGUI
         private System.Windows.Forms.ToolStripMenuItem toolStripMenuItemForbidUnsafeSettings;
         private System.Windows.Forms.ToolStripMenuItem toolStripMenuItemCheckForUpdates;
         private System.Windows.Forms.ToolStripMenuItem toolStripMenuItemMinimizeToTrayOnClose;
+        private System.Windows.Forms.ToolStripMenuItem toolStripMenuItemRunDiagnostics;
+        private System.Windows.Forms.ToolStripMenuItem toolStripMenuItemOpenLog;
+        private System.Windows.Forms.ToolStripSeparator toolStripSeparator1;
 
         // Profile bar
         private System.Windows.Forms.Panel panelProfileBar;
