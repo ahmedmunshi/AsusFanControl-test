@@ -44,7 +44,7 @@ jobs:
         } else {
           $zipName = "AsusFanControlGUI-v$version.zip"
         }
-        Compress-Archive -Path bin\* -DestinationPath $zipName
+        Compress-Archive -Path "AsusFanControlGUI\bin\*" -DestinationPath $zipName
         echo "ZIP_NAME=$zipName" >> $env:GITHUB_OUTPUT
 
     - name: Upload artifact
