@@ -33,6 +33,7 @@ namespace AsusFanControlGUI
 
             // Apply dark theme
             DarkTheme.Apply(this);
+            DarkTheme.ApplyTabControl(tabControl);
 
             // Clear old logs on startup
             ErrorLogger.Clear();
@@ -221,6 +222,7 @@ namespace AsusFanControlGUI
             // Update curve editor
             UpdateCurveEditor();
             UpdateModeVisibility();
+            UpdateProfileDetails();
             RestartEngineIfEnabled();
         }
 
@@ -245,6 +247,14 @@ namespace AsusFanControlGUI
 
             comboBoxFanSelect.SelectedIndex = 0;
             _selectedFanIndex = -1;
+        }
+
+        private void UpdateProfileDetails()
+        {
+            if (activeProfile == null) return;
+
+            labelProfileModeValue.Text = activeProfile.Mode == "curve" ? "Fan Curve" : "Fixed Speed";
+            labelProfileCurvePointsValue.Text = activeProfile.DefaultCurve?.Points?.Count.ToString() ?? "0";
         }
 
         private void comboBoxProfile_SelectedIndexChanged(object sender, EventArgs e)
@@ -511,7 +521,12 @@ namespace AsusFanControlGUI
             labelAppliedSpeed.ForeColor = DarkTheme.TextPrimary;
 
             // Update stats labels
-            labelCpuTemp.Text = $"{e.Temperature} C";
+            if (e.Temperature > 0)
+            {
+                labelCpuTemp.Text = $"{e.Temperature} C";
+                labelCpuTemp.ForeColor = DarkTheme.GetTempColor(e.Temperature);
+            }
+
             labelRPM.Text = string.Join("  ", e.FanRpms.Select(r => $"{r}"));
 
             if (e.AppliedSpeeds != null && e.AppliedSpeeds.Count > 0)

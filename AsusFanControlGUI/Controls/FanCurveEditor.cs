@@ -18,10 +18,10 @@ namespace AsusFanControlGUI.Controls
         private const int SPEED_MAX = 100;
 
         // Layout margins (pixels)
-        private const int MARGIN_LEFT = 45;
+        private const int MARGIN_LEFT = 52;
         private const int MARGIN_RIGHT = 15;
-        private const int MARGIN_TOP = 15;
-        private const int MARGIN_BOTTOM = 30;
+        private const int MARGIN_TOP = 12;
+        private const int MARGIN_BOTTOM = 34;
 
         // Point interaction
         private const int POINT_RADIUS = 6;
@@ -187,11 +187,13 @@ namespace AsusFanControlGUI.Controls
             var area = GetPlotArea();
 
             DrawBackground(g, area);
+            DrawTemperatureZones(g, area);
             DrawUnsafeZone(g, area);
             DrawGrid(g, area);
             DrawCurve(g, area);
             DrawTemperatureMarker(g, area);
             DrawPoints(g);
+            DrawAxisLabels(g, area);
         }
 
         private void DrawBackground(Graphics g, RectangleF area)
@@ -204,6 +206,28 @@ namespace AsusFanControlGUI.Controls
             using (var pen = new Pen(DarkTheme.Border))
             {
                 g.DrawRectangle(pen, area.X, area.Y, area.Width, area.Height);
+            }
+        }
+
+        private void DrawTemperatureZones(Graphics g, RectangleF area)
+        {
+            var zones = new (int from, int to, Color color)[]
+            {
+                (20, 45, DarkTheme.ZoneCool),
+                (45, 65, DarkTheme.ZoneNormal),
+                (65, 80, DarkTheme.ZoneWarm),
+                (80, 100, DarkTheme.ZoneHot)
+            };
+
+            foreach (var (from, to, color) in zones)
+            {
+                float x1 = TempToPixelX(from);
+                float x2 = TempToPixelX(to);
+
+                using (var brush = new SolidBrush(color))
+                {
+                    g.FillRectangle(brush, x1, area.Y, x2 - x1, area.Height);
+                }
             }
         }
 
@@ -226,14 +250,14 @@ namespace AsusFanControlGUI.Controls
         private void DrawGrid(Graphics g, RectangleF area)
         {
             using (var gridPen = new Pen(DarkTheme.GridLines) { DashStyle = DashStyle.Dot })
-            using (var axisFont = new Font("Segoe UI", 7.5f))
+            using (var axisFont = new Font("Segoe UI", 9f))
             using (var textBrush = new SolidBrush(DarkTheme.TextSecondary))
             {
                 var textFormat = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center };
                 var tempFormat = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Near };
 
-                // Horizontal grid lines (speed)
-                for (int speed = SPEED_MIN; speed <= SPEED_MAX; speed += 10)
+                // Horizontal grid lines (speed) at every 20%
+                for (int speed = SPEED_MIN; speed <= SPEED_MAX; speed += 20)
                 {
                     float y = SpeedToPixelY(speed);
 
@@ -241,15 +265,12 @@ namespace AsusFanControlGUI.Controls
                         g.DrawLine(gridPen, area.X, y, area.Right, y);
 
                     // Y-axis labels
-                    if (speed % 20 == 0)
-                    {
-                        g.DrawString($"{speed}%", axisFont, textBrush,
-                            new RectangleF(0, y - 8, MARGIN_LEFT - 5, 16), textFormat);
-                    }
+                    g.DrawString($"{speed}%", axisFont, textBrush,
+                        new RectangleF(0, y - 9, MARGIN_LEFT - 6, 18), textFormat);
                 }
 
-                // Vertical grid lines (temperature)
-                for (int temp = TEMP_MIN; temp <= TEMP_MAX; temp += 10)
+                // Vertical grid lines (temperature) at every 20C
+                for (int temp = TEMP_MIN; temp <= TEMP_MAX; temp += 20)
                 {
                     float x = TempToPixelX(temp);
 
@@ -257,8 +278,8 @@ namespace AsusFanControlGUI.Controls
                         g.DrawLine(gridPen, x, area.Y, x, area.Bottom);
 
                     // X-axis labels
-                    g.DrawString($"{temp}°", axisFont, textBrush,
-                        new RectangleF(x - 15, area.Bottom + 4, 30, 20), tempFormat);
+                    g.DrawString($"{temp}", axisFont, textBrush,
+                        new RectangleF(x - 18, area.Bottom + 4, 36, 22), tempFormat);
                 }
             }
         }
@@ -317,6 +338,29 @@ namespace AsusFanControlGUI.Controls
 
                 if (allPoints.Count >= 2)
                     g.DrawLines(curvePen, allPoints.ToArray());
+            }
+        }
+
+        private void DrawAxisLabels(Graphics g, RectangleF area)
+        {
+            using (var font = new Font("Segoe UI", 9f))
+            using (var textBrush = new SolidBrush(DarkTheme.TextSecondary))
+            {
+                // X-axis title
+                var xTitle = "Temperature (&#176;C)";
+                var xSize = g.MeasureString(xTitle, font);
+                g.DrawString(xTitle, font, textBrush,
+                    area.X + area.Width / 2 - xSize.Width / 2,
+                    area.Bottom + MARGIN_BOTTOM / 2 + 2);
+
+                // Y-axis title (vertical)
+                var yTitle = "Fan Speed";
+                var ySize = g.MeasureString(yTitle, font);
+                var state = g.Save();
+                g.TranslateTransform(MARGIN_LEFT - 42, area.Y + area.Height / 2 + ySize.Width / 2);
+                g.RotateTransform(-90);
+                g.DrawString(yTitle, font, textBrush, 0, 0);
+                g.Restore(state);
             }
         }
 
@@ -402,8 +446,8 @@ namespace AsusFanControlGUI.Controls
 
         private void DrawPointLabel(Graphics g, FanCurvePoint pt, PointF px)
         {
-            using (var font = new Font("Segoe UI", 7.5f))
-            using (var bgBrush = new SolidBrush(Color.FromArgb(200, DarkTheme.Surface.R, DarkTheme.Surface.G, DarkTheme.Surface.B)))
+            using (var font = new Font("Segoe UI", 8.5f))
+            using (var bgBrush = new SolidBrush(Color.FromArgb(220, DarkTheme.Surface.R, DarkTheme.Surface.G, DarkTheme.Surface.B)))
             using (var textBrush = new SolidBrush(DarkTheme.TextPrimary))
             using (var borderPen = new Pen(DarkTheme.Border))
             {

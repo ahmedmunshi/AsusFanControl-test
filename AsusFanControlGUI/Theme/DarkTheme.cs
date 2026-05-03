@@ -33,11 +33,22 @@ namespace AsusFanControlGUI.Theme
         public static readonly Color TempMarker = Color.FromArgb(255, 215, 0);
         public static readonly Color TempMarkerLabel = Color.FromArgb(255, 215, 0);
 
+        // Temperature zone colors
+        public static readonly Color ZoneCool = Color.FromArgb(20, 0, 120, 212);
+        public static readonly Color ZoneNormal = Color.FromArgb(20, 0, 200, 83);
+        public static readonly Color ZoneWarm = Color.FromArgb(20, 255, 152, 0);
+        public static readonly Color ZoneHot = Color.FromArgb(20, 244, 67, 54);
+
         // Controls
         public static readonly Color ButtonBackground = Color.FromArgb(55, 55, 55);
         public static readonly Color ButtonHover = Color.FromArgb(70, 70, 70);
         public static readonly Color ComboBackground = Color.FromArgb(50, 50, 50);
         public static readonly Color CheckBoxCheck = Color.FromArgb(0, 180, 216);
+
+        // Temp display
+        public static readonly Color TempGreen = Color.FromArgb(0, 200, 83);
+        public static readonly Color TempAmber = Color.FromArgb(255, 152, 0);
+        public static readonly Color TempRed = Color.FromArgb(244, 67, 54);
 
         /// <summary>
         /// Applies dark theme to a control and all its children recursively.
@@ -146,6 +157,75 @@ namespace AsusFanControlGUI.Theme
                 if (sub is ToolStripMenuItem subMenu)
                     ApplyToMenuItem(subMenu);
             }
+        }
+
+        /// <summary>
+        /// Applies dark theme to a TabControl with clean flat tabs.
+        /// Must be called after applying theme to the parent.
+        /// </summary>
+        public static void ApplyTabControl(TabControl tabControl)
+        {
+            tabControl.DrawMode = TabDrawMode.OwnerDrawFixed;
+            tabControl.BackColor = Background;
+            tabControl.Padding = new System.Drawing.Point(6, 4);
+            tabControl.ItemSize = new System.Drawing.Size(0, 32);
+            tabControl.DrawItem += (sender, e) =>
+            {
+                var tab = tabControl.TabPages[e.Index];
+                var g = e.Graphics;
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+
+                var rect = e.Bounds;
+                bool isSelected = e.State == DrawItemState.Selected;
+
+                // Tab background
+                using (var bgBrush = new SolidBrush(isSelected ? Surface : Background))
+                {
+                    g.FillRectangle(bgBrush, rect);
+                }
+
+                // Bottom accent bar for selected tab
+                if (isSelected)
+                {
+                    var accentRect = new Rectangle(rect.X + 4, rect.Bottom - 3, rect.Width - 8, 3);
+                    using (var accentBrush = new SolidBrush(Accent))
+                    {
+                        g.FillRectangle(accentBrush, accentRect);
+                    }
+                }
+
+                // Tab text
+                var textColor = isSelected ? TextPrimary : TextSecondary;
+                var textRect = new Rectangle(rect.X + 12, rect.Y, rect.Width - 24, rect.Height);
+                using (var textBrush = new SolidBrush(textColor))
+                using (var font = new Font("Segoe UI", 9f))
+                {
+                    var sf = new StringFormat
+                    {
+                        Alignment = StringAlignment.Center,
+                        LineAlignment = StringAlignment.Center
+                    };
+                    g.DrawString(tab.Text, font, textBrush, textRect, sf);
+                }
+            };
+
+            // Style each tab page
+            foreach (TabPage page in tabControl.TabPages)
+            {
+                page.BackColor = Background;
+                page.ForeColor = TextPrimary;
+            }
+        }
+
+        /// <summary>
+        /// Returns a color based on CPU temperature: green < 60, amber 60-80, red > 80.
+        /// </summary>
+        public static Color GetTempColor(int temperature)
+        {
+            if (temperature >= 80) return TempRed;
+            if (temperature >= 60) return TempAmber;
+            return TempGreen;
         }
     }
 
