@@ -5,7 +5,9 @@ using AsusFanControlGUI.Theme;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
+using System.Security.Principal;
 using System.Windows.Forms;
 
 namespace AsusFanControlGUI
@@ -36,41 +38,31 @@ namespace AsusFanControlGUI
             ErrorLogger.Clear();
             ErrorLogger.Log("Application starting.");
 
-            // Check admin privileges
-            if (!DiagnosticHelper.IsRunAsAdmin())
+            // Check if running as LocalSystem (NT AUTHORITY\SYSTEM)
+            // ASUS driver v3.1.41.0+ requires LocalSystem, not just Administrator
+            if (!IsRunningAsLocalSystem())
             {
-                ErrorLogger.Log("WARNING: Not running as administrator.");
-                var result = MessageBox.Show(
-                    "This application requires Administrator privileges to control fans.\n\n" +
-                    "Restart as Administrator?",
-                    "Admin Required",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Warning
-                );
-
-                if (result == DialogResult.Yes)
+                if (!TryRelaunchAsLocalSystem())
                 {
-                    try
-                    {
-                        var exePath = Application.ExecutablePath;
-                        var psi = new ProcessStartInfo
-                        {
-                            FileName = exePath,
-                            UseShellExecute = true,
-                            Verb = "runas"
-                        };
-                        Process.Start(psi);
-                        Application.Exit();
-                        return;
-                    }
-                    catch (Exception ex)
-                    {
-                        ErrorLogger.Log("AdminRelaunch", ex);
-                        MessageBox.Show("Failed to restart as admin: " + ex.Message, "Error",
-                            MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    }
+                    ErrorLogger.Log("Not running as LocalSystem and PsExec not available.");
+                    MessageBox.Show(
+                        "This application requires LocalSystem privileges (not just Administrator).\n\n" +
+                        "ASUS driver v3.1.41.0+ restricts access to the LocalSystem account.\n\n" +
+                        "Run 'run.bat' to launch with the correct privileges, or\n" +
+                        "downgrade ASUSSystemControlInterface driver to v3.1.40.0.",
+                        "LocalSystem Required",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning
+                    );
+                }
+                else
+                {
+                    // PsExec launched successfully, exit this process
+                    return;
                 }
             }
+
+            ErrorLogger.Log($"Running as: {WindowsIdentity.GetCurrent().Name}");
 
             // Check DLL exists
             if (!DiagnosticHelper.DllExistsNextToExe())
@@ -730,6 +722,63 @@ namespace AsusFanControlGUI
                 form.CancelButton = cancelButton;
 
                 return form.ShowDialog(this) == DialogResult.OK ? textBox.Text.Trim() : null;
+            }
+        }
+
+        /// <summary>
+        /// Checks if the current process is running as LocalSystem (NT AUTHORITY\SYSTEM).
+        /// ASUS driver v3.1.41.0+ requires this privilege level.
+        /// </summary>
+        private static bool IsRunningAsLocalSystem()
+        {
+            try
+            {
+                var identity = WindowsIdentity.GetCurrent();
+                return identity.IsSystem;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Launches the app via PsExec64.exe as LocalSystem.
+        /// Returns true if PsExec was found and launched successfully.
+        /// </summary>
+        private static bool TryRelaunchAsLocalSystem()
+        {
+            try
+            {
+                var exeDir = AppDomain.CurrentDomain.BaseDirectory;
+                var psexecPath = Path.Combine(exeDir, "PsExec64.exe");
+                var appPath = Application.ExecutablePath;
+
+                if (!File.Exists(psexecPath))
+                {
+                    ErrorLogger.Log("PsExec64.exe not found at: " + psexecPath);
+                    return false;
+                }
+
+                ErrorLogger.Log($"Relaunching via PsExec: {psexecPath} -accepteula -i -s -d \"{appPath}\"");
+
+                var psi = new ProcessStartInfo
+                {
+                    FileName = psexecPath,
+                    Arguments = $"-accepteula -i -s -d \"{appPath}\"",
+                    UseShellExecute = true,
+                    CreateNoWindow = true
+                };
+
+                Process.Start(psi);
+                ErrorLogger.Log("PsExec launched. Exiting current process.");
+                Application.Exit();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                ErrorLogger.Log("TryRelaunchAsLocalSystem", ex);
+                return false;
             }
         }
 
