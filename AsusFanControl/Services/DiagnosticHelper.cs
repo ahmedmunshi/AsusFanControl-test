@@ -17,26 +17,65 @@ namespace AsusFanControl.Services
         public int CpuTemp { get; set; }
         public bool CanReadRpm { get; set; }
         public List<int> FanRpms { get; set; }
+        public bool AsusServiceFound { get; set; }
         public bool AsusServiceRunning { get; set; }
-        public string Error { get; set; }
+        public List<string> AsusServicesFound { get; set; }
+        public List<string> Errors { get; set; }
 
-        public bool AllPassed => IsAdmin && DllExists && DllLoaded && CanReadFanCount && FanCount > 0 && CanReadTemp && CanReadRpm;
+        public DiagnosticResult()
+        {
+            FanRpms = new List<int>();
+            AsusServicesFound = new List<string>();
+            Errors = new List<string>();
+        }
+
+        public bool AllPassed => IsAdmin && DllExists && DllLoaded && CanReadFanCount && FanCount > 0 && CanReadTemp && CpuTemp > 0 && CanReadRpm;
 
         public string GetSummary()
         {
             var lines = new List<string>();
             lines.Add($"Admin privileges:     {(IsAdmin ? "YES" : "NO -- Run as Administrator!")}");
             lines.Add($"AsusWinIO64.dll:      {(DllExists ? "Found" : "MISSING -- DLL not next to exe!")}");
-            lines.Add($"ASUS service:         {(AsusServiceRunning ? "Running" : "Not detected (may still work)")}");
             lines.Add($"DLL loaded:           {(DllLoaded ? "YES" : "NO -- InitializeWinIo failed!")}");
-            lines.Add($"Fan count:            {(CanReadFanCount ? FanCount.ToString() : "FAILED")}");
-            lines.Add($"CPU temperature:      {(CanReadTemp ? $"{CpuTemp} C" : "FAILED")}");
-            lines.Add($"Fan RPM:              {(CanReadRpm ? string.Join(", ", FanRpms) : "FAILED")}");
 
-            if (!string.IsNullOrEmpty(Error))
-                lines.Add($"\nError details: {Error}");
+            if (AsusServicesFound.Count > 0)
+            {
+                lines.Add($"ASUS services found:  {string.Join(", ", AsusServicesFound)}");
+                lines.Add($"ASUS service running: {(AsusServiceRunning ? "YES" : "NO -- Start it in Windows Services!")}");
+            }
+            else
+            {
+                lines.Add($"ASUS services found:  NONE FOUND");
+                lines.Add($"");
+                lines.Add($"  ** ASUS System Control Interface is NOT installed. **");
+                lines.Add($"  Install MyASUS from the Microsoft Store, then");
+                lines.Add($"  ensure 'ASUS System Analysis' service is running.");
+            }
 
-            lines.Add($"\nOverall: {(AllPassed ? "ALL CHECKS PASSED" : "SOME CHECKS FAILED -- see above")}");
+            lines.Add($"");
+            lines.Add($"Fan count:            {FanCount}{(FanCount <= 0 ? "  ** INVALID - service not working **" : "")}");
+            lines.Add($"CPU temperature:      {CpuTemp} C{(CpuTemp == 0 ? "  ** INVALID - service not working **" : "")}");
+
+            if (CanReadRpm && FanRpms.Count > 0)
+                lines.Add($"Fan RPM:              {string.Join(", ", FanRpms)}");
+            else
+                lines.Add($"Fan RPM:              FAILED (fan count was {FanCount})");
+
+            if (Errors.Count > 0)
+            {
+                lines.Add($"");
+                lines.Add($"Errors:");
+                foreach (var err in Errors)
+                    lines.Add($"  - {err}");
+            }
+
+            lines.Add($"");
+            if (AllPassed)
+                lines.Add("Overall: ALL CHECKS PASSED");
+            else if (FanCount <= 0 || CpuTemp == 0)
+                lines.Add("Overall: ASUS SYSTEM CONTROL INTERFACE NOT WORKING\n\nThe DLL loaded but cannot communicate with hardware.\nMake sure the ASUS System Analysis service is running.\n\nSteps:\n1. Install MyASUS from Microsoft Store\n2. Open Windows Services (services.msc)\n3. Find 'ASUS System Analysis' and Start it\n4. Restart this application");
+            else
+                lines.Add("Overall: SOME CHECKS FAILED -- see above");
 
             return string.Join(Environment.NewLine, lines);
         }
@@ -44,6 +83,21 @@ namespace AsusFanControl.Services
 
     public static class DiagnosticHelper
     {
+        // Known ASUS service name patterns
+        private static readonly string[] AsusServicePatterns = new[]
+        {
+            "asussci",
+            "asussystem",
+            "aborhelper",
+            "aaborhelper",
+            "asusoptimization",
+            "asuslinkclient",
+            "asuslinknear",
+            "asussoftwaremanager",
+            "asusappservice",
+            "aaborhelperservice"
+        };
+
         public static bool IsRunAsAdmin()
         {
             try
@@ -72,30 +126,52 @@ namespace AsusFanControl.Services
             }
         }
 
-        public static bool IsAsusServiceRunning()
+        public static void FindAsusServices(out List<string> found, out bool anyRunning)
         {
+            found = new List<string>();
+            anyRunning = false;
+
             try
             {
                 var services = ServiceController.GetServices();
                 foreach (var svc in services)
                 {
-                    if (svc.ServiceName.IndexOf("ASUSSystem", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                        svc.ServiceName.IndexOf("AsusSystemAnalysis", StringComparison.OrdinalIgnoreCase) >= 0)
+                    var nameLower = svc.ServiceName.ToLowerInvariant();
+                    var displayLower = svc.DisplayName.ToLowerInvariant();
+
+                    bool isAsus = nameLower.Contains("asus") || displayLower.Contains("asus");
+
+                    if (!isAsus)
                     {
-                        return svc.Status == ServiceControllerStatus.Running;
+                        foreach (var pattern in AsusServicePatterns)
+                        {
+                            if (nameLower.Contains(pattern))
+                            {
+                                isAsus = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (isAsus)
+                    {
+                        var status = svc.Status == ServiceControllerStatus.Running ? "Running" : svc.Status.ToString();
+                        found.Add($"{svc.ServiceName} ({status})");
+
+                        if (svc.Status == ServiceControllerStatus.Running)
+                            anyRunning = true;
                     }
                 }
             }
-            catch { }
-            return false;
+            catch (Exception ex)
+            {
+                ErrorLogger.Log("FindAsusServices", ex);
+            }
         }
 
         public static DiagnosticResult RunFullDiagnostic(AsusControl asusControl)
         {
-            var result = new DiagnosticResult
-            {
-                FanRpms = new List<int>()
-            };
+            var result = new DiagnosticResult();
 
             // Check admin
             result.IsAdmin = IsRunAsAdmin();
@@ -103,15 +179,20 @@ namespace AsusFanControl.Services
             // Check DLL
             result.DllExists = DllExistsNextToExe();
 
-            // Check ASUS service
-            result.AsusServiceRunning = IsAsusServiceRunning();
+            // Check ASUS services
+            List<string> found;
+            bool anyRunning;
+            FindAsusServices(out found, out anyRunning);
+            result.AsusServicesFound = found;
+            result.AsusServiceFound = found.Count > 0;
+            result.AsusServiceRunning = anyRunning;
 
-            // Check DLL loaded (if asusControl was created, InitializeWinIo was called)
+            // Check DLL loaded
             result.DllLoaded = asusControl != null;
 
             if (asusControl == null)
             {
-                result.Error = "AsusControl is null -- DLL failed to initialize.";
+                result.Errors.Add("AsusControl is null -- DLL failed to initialize.");
                 return result;
             }
 
@@ -120,10 +201,13 @@ namespace AsusFanControl.Services
             {
                 result.FanCount = asusControl.HealthyTable_FanCounts();
                 result.CanReadFanCount = true;
+
+                if (result.FanCount <= 0)
+                    result.Errors.Add($"FanCounts returned {result.FanCount}. ASUS service may not be running or communicating.");
             }
             catch (Exception ex)
             {
-                result.Error = $"FanCounts failed: {ex.Message}";
+                result.Errors.Add($"FanCounts exception: {ex.Message}");
                 ErrorLogger.Log("Diagnostic.FanCount", ex);
             }
 
@@ -132,26 +216,32 @@ namespace AsusFanControl.Services
             {
                 result.CpuTemp = (int)asusControl.Thermal_Read_Cpu_Temperature();
                 result.CanReadTemp = true;
+
+                if (result.CpuTemp == 0)
+                    result.Errors.Add("CPU temp returned 0. ASUS service may not be running.");
             }
             catch (Exception ex)
             {
-                result.Error = $"ReadTemp failed: {ex.Message}";
+                result.Errors.Add($"ReadTemp exception: {ex.Message}");
                 ErrorLogger.Log("Diagnostic.ReadTemp", ex);
             }
 
-            // Check RPM
-            try
+            // Check RPM (only if fan count is valid)
+            if (result.FanCount > 0)
             {
-                for (byte i = 0; i < result.FanCount; i++)
+                try
                 {
-                    result.FanRpms.Add(asusControl.GetFanSpeed(i));
+                    for (byte i = 0; i < result.FanCount; i++)
+                    {
+                        result.FanRpms.Add(asusControl.GetFanSpeed(i));
+                    }
+                    result.CanReadRpm = result.FanRpms.Count > 0;
                 }
-                result.CanReadRpm = result.FanRpms.Count > 0;
-            }
-            catch (Exception ex)
-            {
-                result.Error = $"GetFanSpeed failed: {ex.Message}";
-                ErrorLogger.Log("Diagnostic.GetRPM", ex);
+                catch (Exception ex)
+                {
+                    result.Errors.Add($"GetFanSpeed exception: {ex.Message}");
+                    ErrorLogger.Log("Diagnostic.GetRPM", ex);
+                }
             }
 
             return result;

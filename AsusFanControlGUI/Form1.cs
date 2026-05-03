@@ -133,6 +133,48 @@ namespace AsusFanControlGUI
                 labelAppliedSpeed.Text = "Init failed - see log";
                 checkBoxEnable.Enabled = false;
             }
+            else
+            {
+                // Quick sanity check -- is the ASUS service actually working?
+                try
+                {
+                    var fanCount = asusControl.HealthyTable_FanCounts();
+                    var cpuTemp = (int)asusControl.Thermal_Read_Cpu_Temperature();
+
+                    if (fanCount <= 0 || cpuTemp <= 0)
+                    {
+                        ErrorLogger.Log($"Startup check: FanCount={fanCount}, CpuTemp={cpuTemp}");
+
+                        labelAppliedSpeed.Text = "ASUS service not working";
+                        labelAppliedSpeed.ForeColor = System.Drawing.Color.FromArgb(255, 100, 100);
+
+                        MessageBox.Show(
+                            $"ASUS System Control Interface is not responding.\n\n" +
+                            $"Fan count: {fanCount}\n" +
+                            $"CPU temp: {cpuTemp}\n\n" +
+                            "The DLL loaded but cannot communicate with hardware.\n\n" +
+                            "To fix this:\n" +
+                            "1. Open Windows Services (Win+R > services.msc)\n" +
+                            "2. Find 'ASUS System Analysis' and Start it\n" +
+                            "3. If not found, install MyASUS from the Microsoft Store\n" +
+                            "4. Restart this application\n\n" +
+                            "Use Advanced > Run Diagnostics for more details.",
+                            "ASUS Service Not Working",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning
+                        );
+                    }
+                    else
+                    {
+                        ErrorLogger.Log($"Startup check OK: FanCount={fanCount}, CpuTemp={cpuTemp}");
+                        labelCpuTemp.Text = $"{cpuTemp} C";
+                    }
+                }
+                catch (Exception ex)
+                {
+                    ErrorLogger.Log("StartupCheck", ex);
+                }
+            }
         }
 
         #region Profile Management

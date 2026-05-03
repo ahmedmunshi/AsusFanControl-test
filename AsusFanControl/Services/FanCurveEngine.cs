@@ -154,7 +154,15 @@ namespace AsusFanControl.Services
 
                 if (fanCount <= 0)
                 {
-                    error = $"Fan count returned {fanCount}. ASUS service may not be running.";
+                    error = $"Fan count = {fanCount}. ASUS System Analysis service not running. Open services.msc and start it.";
+                    ErrorLogger.Log(error);
+                    FireErrorTick(error);
+                    return;
+                }
+
+                if (temperature <= 0)
+                {
+                    error = $"CPU temp = {temperature}. ASUS service not communicating. Restart the ASUS System Analysis service.";
                     ErrorLogger.Log(error);
                     FireErrorTick(error);
                     return;
